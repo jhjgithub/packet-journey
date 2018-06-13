@@ -4,7 +4,8 @@ endif
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-BUILD_TARGET ?= debug
+#BUILD_TARGET ?= debug
+BUILD_TARGET ?= qemu
 export BUILD_TARGET
 
 # by default we build in build/

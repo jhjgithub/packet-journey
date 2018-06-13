@@ -74,6 +74,7 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 #include <rte_version.h>
 #include <rte_common.h>
@@ -602,6 +603,44 @@ rate_limit_step_ipv6(struct lcore_conf* qconf,
 	return 0;
 }
 
+void dump_packet(struct rte_mbuf* pkt, int pkts)
+{
+	struct ether_hdr* eth_hdr;
+	struct ipv4_hdr* ipv4_hdr;
+	char smac[ETHER_ADDR_FMT_SIZE];
+	char dmac[ETHER_ADDR_FMT_SIZE];
+	char buf[256] = {0};
+
+	eth_hdr = rte_pktmbuf_mtod(pkt, struct ether_hdr*);
+	ipv4_hdr = (struct ipv4_hdr*)(eth_hdr + 1);
+
+	ether_format_addr(smac, ETHER_ADDR_FMT_SIZE, (const struct ether_addr *)&eth_hdr->s_addr);
+	ether_format_addr(dmac, ETHER_ADDR_FMT_SIZE, (const struct ether_addr *)&eth_hdr->d_addr);
+
+	uint16_t t = ntohs(eth_hdr->ether_type);
+
+
+	if (t == ETHER_TYPE_IPv4) {
+		struct in_addr src, dst;
+		char sbuf[32];
+		char dbuf[32];
+
+		src.s_addr = ipv4_hdr->src_addr;
+		dst.s_addr = ipv4_hdr->dst_addr;
+
+		inet_aton(sbuf, &src);
+		inet_aton(dbuf, &dst);
+
+		RTE_LOG(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
+		RTE_LOG(ERR, PKTJ1, "IPv4:%s->%s \n", sbuf, dbuf);
+	}
+	else if (t == ETHER_TYPE_ARP) {
+		RTE_LOG(ERR, PKTJ1, "ARP packet \n");
+		RTE_LOG(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
+	}
+
+}
+
 /*
  * Read packet_type and destination IPV4 addresses from 4 mbufs.
  */
@@ -827,6 +866,10 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 						kni_burst_free_mbufs(
 						    &knimbuf[0], i);
 				}
+#if 0
+				RTE_LOG(ERR, KNI, "%s:%d:eth%d(%d)->kni%d(%d)\n", __FUNCTION__, __LINE__, 
+						portid, i, k, num);
+#endif
 				RTE_LOG(
 				    DEBUG, PKTJ1,
 				    "k %d nb_rx %d i %d num %d lcore_id %d\n",
@@ -1248,6 +1291,43 @@ rte_atomic64_cmpswap(volatile uintptr_t* dst, uintptr_t* exp, uintptr_t src)
 }
 #endif
 
+#ifdef ATOMIC_ACL
+#define SWAP_ACX(cur_acx, new_acx)                                            \
+	acx = cur_acx;                                                        \
+	if (!rte_atomic64_cmpswap((uintptr_t*)&new_acx, (uintptr_t*)&cur_acx, \
+				  (uintptr_t)new_acx)) {                      \
+		rte_acl_free(acx);                                            \
+	}
+#else
+#define SWAP_ACX(cur_acx, new_acx)          \
+	if (unlikely(cur_acx != new_acx)) { \
+		rte_acl_free(cur_acx);      \
+		cur_acx = new_acx;          \
+	}
+#endif
+
+#define PROCESS_STEP2(offset)                            \
+	process_step2(qconf, pkts_burst[nb_rx - offset], \
+		      dst_port + nb_rx - offset)
+
+#define PROCESS_STEP3_1()                                  \
+	process_step3(qconf, pkts_burst[j], &dst_port[j]); \
+	if (likely((dlp) == dst_port[j])) {                \
+		lp[0]++;                                   \
+	} else {                                           \
+		dlp = dst_port[j];                         \
+		lp = &pnum[j];                             \
+		lp[0] = 1;                                 \
+	}                                                  \
+	j++;
+#define PROCESS_STEP3_2()                                  \
+	process_step3(qconf, pkts_burst[j], &dst_port[j]); \
+	if (likely((dlp) == dst_port[j])) {                \
+		lp[0]++;                                   \
+	} else {                                           \
+		pnum[j] = 1;                               \
+	}
+
 /* main processing loop */
 static int
 main_loop(__rte_unused void* dummy)
@@ -1301,24 +1381,8 @@ main_loop(__rte_unused void* dummy)
 		stats[lcore_id].nb_iteration_looped++;
 		cur_tsc = glob_tsc[lcore_id];
 
-#ifdef ATOMIC_ACL
-#define SWAP_ACX(cur_acx, new_acx)                                            \
-	acx = cur_acx;                                                        \
-	if (!rte_atomic64_cmpswap((uintptr_t*)&new_acx, (uintptr_t*)&cur_acx, \
-				  (uintptr_t)new_acx)) {                      \
-		rte_acl_free(acx);                                            \
-	}
-#else
-#define SWAP_ACX(cur_acx, new_acx)          \
-	if (unlikely(cur_acx != new_acx)) { \
-		rte_acl_free(cur_acx);      \
-		cur_acx = new_acx;          \
-	}
-#endif
-
 		SWAP_ACX(qconf->cur_acx_ipv4, qconf->new_acx_ipv4);
 		SWAP_ACX(qconf->cur_acx_ipv6, qconf->new_acx_ipv6);
-#undef SWAP_ACX
 
 		/*
 		 * TX burst queue drain
@@ -1404,9 +1468,6 @@ main_loop(__rte_unused void* dummy)
 			RTE_LOG(DEBUG, PKTJ1,
 				"main_loop acl nb_rx %d  queue_id %d\n", nb_rx,
 				queueid);
-#define PROCESS_STEP2(offset)                            \
-	process_step2(qconf, pkts_burst[nb_rx - offset], \
-		      dst_port + nb_rx - offset)
 
 			switch (nb_rx % FWDSTEP) {
 			case 3:
@@ -1416,6 +1477,14 @@ main_loop(__rte_unused void* dummy)
 			case 1:
 				PROCESS_STEP2(1);
 			}
+
+#if 0
+			if (nb_rx > 0) {
+				for (j = 0; j < nb_rx; j ++) {
+					dump_packet(pkts_burst[j], 1);
+				}
+			}
+#endif
 
 			k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
 			for (j = 0; j != k; j += FWDSTEP) {
@@ -1495,24 +1564,6 @@ main_loop(__rte_unused void* dummy)
 				lp = pnum + MAX_PKT_BURST;
 				j = 0;
 			}
-
-#define PROCESS_STEP3_1()                                  \
-	process_step3(qconf, pkts_burst[j], &dst_port[j]); \
-	if (likely((dlp) == dst_port[j])) {                \
-		lp[0]++;                                   \
-	} else {                                           \
-		dlp = dst_port[j];                         \
-		lp = &pnum[j];                             \
-		lp[0] = 1;                                 \
-	}                                                  \
-	j++;
-#define PROCESS_STEP3_2()                                  \
-	process_step3(qconf, pkts_burst[j], &dst_port[j]); \
-	if (likely((dlp) == dst_port[j])) {                \
-		lp[0]++;                                   \
-	} else {                                           \
-		pnum[j] = 1;                               \
-	}
 
 			/* Process up to last 3 packets one by one. */
 			switch (nb_rx % FWDSTEP) {
@@ -1870,6 +1921,7 @@ init_port(uint8_t portid)
 	RTE_LOG(INFO, PKTJ1, "Initializing port %d ...\n", portid);
 
 	nb_rx_queue = get_port_n_rx_queues(portid);
+	// FXIME: ????
 	// XXX the +1 is for the kni
 	nb_tx_queue = nb_rx_queue + 1;
 	RTE_LOG(INFO, PKTJ1, "Creating queues: nb_rxq=%d nb_txq=%u...\n",

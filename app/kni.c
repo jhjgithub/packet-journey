@@ -123,6 +123,7 @@ uint8_t kni_port_rdy[RTE_MAX_ETHPORTS] = {0};
 
 static int kni_change_mtu(uint16_t port_id, unsigned new_mtu);
 static int kni_config_network_interface(uint16_t port_id, uint8_t if_up);
+void dump_packet(struct rte_mbuf* pkt, int pkts);
 
 static rte_atomic32_t kni_stop = RTE_ATOMIC32_INIT(0);
 
@@ -172,6 +173,23 @@ kni_egress(struct kni_port_params* p, uint32_t lcore_id)
 			RTE_LOG(ERR, KNI, "Error receiving from KNI\n");
 			return;
 		}
+
+#if 0
+		if (num != 0) {
+			unsigned j;
+
+			RTE_LOG(ERR, KNI, "%s:%d: kni%d(%d)->eth%d(%d)\n", 
+					__FUNCTION__, __LINE__,
+					i, num, port_id, nb_tx);
+
+			for (j=0; j < num; j++) {
+				dump_packet(pkts_burst[j], 1);
+			}
+		}
+#endif
+
+		// FIXME
+		queue_num = 0;
 		/* Burst tx to eth */
 		nb_tx = rte_eth_tx_burst(port_id, queue_num, pkts_burst,
 					 (uint16_t)num);
