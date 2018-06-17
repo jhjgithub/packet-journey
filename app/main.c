@@ -104,6 +104,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_ip.h>
+#include <rte_icmp.h>
 #include <rte_tcp.h>
 #include <rte_udp.h>
 #include <rte_string_fns.h>
@@ -114,6 +115,7 @@
 #include <cmdline_parse.h>
 #include <cmdline_parse_ipaddr.h>
 #include <rte_acl.h>
+//#include <rte_spinlock.h>
 
 #include <libneighbour.h>
 #include <libnetlink.h>
@@ -125,6 +127,7 @@
 #include "cmdline.h"
 #include "acl.h"
 #include "config.h"
+#include "dbg.h"
 
 /**
  * ICMPv6 Header
@@ -180,6 +183,7 @@ uint16_t __real_virtio_recv_mergeable_pkts(void* rx_queue,
 uint16_t __wrap_virtio_recv_mergeable_pkts(void* rx_queue,
 					   struct rte_mbuf** rx_pkts,
 					   uint16_t nb_pkts);
+
 uint16_t
 __wrap_virtio_recv_mergeable_pkts(void* rx_queue,
 				  struct rte_mbuf** rx_pkts,
@@ -266,8 +270,8 @@ static struct rte_mempool* pktmbuf_pool[NB_SOCKETS];
 static uint64_t glob_tsc[RTE_MAX_LCORE];
 static struct rte_mempool* knimbuf_pool[RTE_MAX_ETHPORTS];
 struct nei_entry kni_neighbor[RTE_MAX_ETHPORTS];
-static rte_spinlock_t spinlock_kni[RTE_MAX_ETHPORTS] = {
-    RTE_SPINLOCK_INITIALIZER};
+static rte_spinlock_t spinlock_kni[RTE_MAX_ETHPORTS] = {RTE_SPINLOCK_INITIALIZER};
+rte_spinlock_t spinlock_port[RTE_MAX_ETHPORTS] = {RTE_SPINLOCK_INITIALIZER};
 
 #define IPV4_L3FWD_LPM_MAX_RULES (1 << 20) // 1048576
 #define IPV4_L3FWD_LPM_NUMBER_TBL8S (1 << 16)
@@ -289,7 +293,7 @@ print_ethaddr(const char* name, const struct ether_addr* eth_addr)
 
 /* Send burst of packets on an output interface */
 static inline int
-send_burst(struct lcore_conf* qconf, uint16_t n, uint8_t port)
+send_burst(struct lcore_conf* qconf, uint16_t n, uint16_t port)
 {
 	struct rte_mbuf** m_table;
 	int ret;
@@ -298,7 +302,10 @@ send_burst(struct lcore_conf* qconf, uint16_t n, uint8_t port)
 	queueid = qconf->tx_queue_id[port];
 	m_table = (struct rte_mbuf**)qconf->tx_mbufs[port].m_table;
 
+	rte_spinlock_lock(&spinlock_port[port]);
 	ret = rte_eth_tx_burst(port, queueid, m_table, n);
+	rte_spinlock_unlock(&spinlock_port[port]);
+
 	if (unlikely(ret < n)) {
 		do {
 			rte_pktmbuf_free(m_table[ret]);
@@ -310,7 +317,7 @@ send_burst(struct lcore_conf* qconf, uint16_t n, uint8_t port)
 
 static inline __attribute__((always_inline)) void
 send_packetsx4(struct lcore_conf* qconf,
-	       uint8_t port,
+	       uint16_t port,
 	       struct rte_mbuf* m[],
 	       uint32_t num)
 {
@@ -348,10 +355,13 @@ send_packetsx4(struct lcore_conf* qconf,
 		while (j < n) {
 		case 0:
 			PUT_PACKET_IN_BUFFER(len + j, j);
+			/* Falls through. */
 		case 3:
 			PUT_PACKET_IN_BUFFER(len + j, j);
+			/* Falls through. */
 		case 2:
 			PUT_PACKET_IN_BUFFER(len + j, j);
+			/* Falls through. */
 		case 1:
 			PUT_PACKET_IN_BUFFER(len + j, j);
 		}
@@ -370,10 +380,13 @@ send_packetsx4(struct lcore_conf* qconf,
 			while (j < len) {
 			case 0:
 				PUT_PACKET_IN_BUFFER(j, n + j);
+				/* Falls through. */
 			case 3:
 				PUT_PACKET_IN_BUFFER(j, n + j);
+				/* Falls through. */
 			case 2:
 				PUT_PACKET_IN_BUFFER(j, n + j);
+				/* Falls through. */
 			case 1:
 				PUT_PACKET_IN_BUFFER(j, n + j);
 			}
@@ -498,14 +511,14 @@ process_step2(struct lcore_conf* qconf,
 	if (likely(PKTJ_TEST_IPV4_HDR(pkt))) {
 		ipv4_hdr = (struct ipv4_hdr*)(eth_hdr + 1);
 		dp = get_ipv4_dst_port(ipv4_hdr, 0, qconf->ipv4_lookup_struct);
-		RTE_LOG(DEBUG, PKTJ1, "process_packet4 res %d\n", dp);
+		plog(DEBUG, PKTJ1, "process_packet4 res %d\n", dp);
 		dst_port[0] = dp;
 	} else if (PKTJ_TEST_IPV6_HDR(pkt)) {
 		ipv6_hdr = (struct ipv6_hdr*)(eth_hdr + 1);
 
 		dp = get_ipv6_dst_port(ipv6_hdr, 0, qconf->ipv6_lookup_struct);
 		dst_port[0] = dp;
-		RTE_LOG(DEBUG, PKTJ1, "process_packet6 res %d\n", dp);
+		plog(DEBUG, PKTJ1, "process_packet6 res %d\n", dp);
 	}
 	return 0;
 }
@@ -603,13 +616,13 @@ rate_limit_step_ipv6(struct lcore_conf* qconf,
 	return 0;
 }
 
-void dump_packet(struct rte_mbuf* pkt, int pkts)
+void _dump_packet(const char *file, int line, struct rte_mbuf* pkt)
 {
 	struct ether_hdr* eth_hdr;
 	struct ipv4_hdr* ipv4_hdr;
 	char smac[ETHER_ADDR_FMT_SIZE];
 	char dmac[ETHER_ADDR_FMT_SIZE];
-	char buf[256] = {0};
+	//char buf[256] = {0};
 
 	eth_hdr = rte_pktmbuf_mtod(pkt, struct ether_hdr*);
 	ipv4_hdr = (struct ipv4_hdr*)(eth_hdr + 1);
@@ -619,6 +632,7 @@ void dump_packet(struct rte_mbuf* pkt, int pkts)
 
 	uint16_t t = ntohs(eth_hdr->ether_type);
 
+	plog(ERR, PKTJ1, "=== Packet Dump(%s:%d) ===\n", file, line);
 
 	if (t == ETHER_TYPE_IPv4) {
 		struct in_addr src, dst;
@@ -628,15 +642,29 @@ void dump_packet(struct rte_mbuf* pkt, int pkts)
 		src.s_addr = ipv4_hdr->src_addr;
 		dst.s_addr = ipv4_hdr->dst_addr;
 
-		inet_aton(sbuf, &src);
-		inet_aton(dbuf, &dst);
+		strcpy(sbuf, inet_ntoa(src));
+		strcpy(dbuf, inet_ntoa(dst));
 
-		RTE_LOG(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
-		RTE_LOG(ERR, PKTJ1, "IPv4:%s->%s \n", sbuf, dbuf);
+		plog(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
+		plog(ERR, PKTJ1, "IPv4: proto=%d, %s->%s \n", 
+			 ipv4_hdr->next_proto_id, 
+			 sbuf, dbuf);
+
+		if (ipv4_hdr->next_proto_id == 1) {
+			struct icmp_hdr *ich = (struct icmp_hdr*)(ipv4_hdr + 1);
+			plog(ERR, PKTJ1, "type=%d, code=%d, id=0x%x, seq=%d \n",
+				 ich->icmp_type, ich->icmp_code, ich->icmp_ident, ntohs(ich->icmp_seq_nb));
+		}
+
 	}
 	else if (t == ETHER_TYPE_ARP) {
-		RTE_LOG(ERR, PKTJ1, "ARP packet \n");
-		RTE_LOG(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
+		plog(ERR, PKTJ1, "ARP packet \n");
+		plog(ERR, PKTJ1, "ETH(%x)=%s->%s \n", t, smac, dmac);
+	}
+	else if (t == ETHER_TYPE_VLAN) {
+	}
+	else {
+		plog(ERR, PKTJ1, "Unknown packet: 0x%x \n", t);
 	}
 
 }
@@ -702,7 +730,7 @@ processx4_step2(const struct lcore_conf* qconf,
 		rte_lpm_lookupx4(qconf->ipv4_lookup_struct, dip, dst.u32, 0);
 		dst.x = _mm_packs_epi32(dst.x, dst.x);
 		*(uint64_t *)neighbor = dst.u64[0];
-		RTE_LOG(DEBUG, PKTJ1, "lookpx4 res %d:%d:%d:%d\n", neighbor[0],
+		plog(DEBUG, PKTJ1, "lookpx4 res %d:%d:%d:%d\n", neighbor[0],
 			neighbor[1], neighbor[2], neighbor[3]);
 	} else {
 		dst.x = dip;
@@ -715,7 +743,7 @@ processx4_step2(const struct lcore_conf* qconf,
 		    get_dst_port(qconf, pkt[2], dst.u32[2], neighbor_entry);
 		neighbor[3] =
 		    get_dst_port(qconf, pkt[3], dst.u32[3], neighbor_entry);
-		RTE_LOG(DEBUG, PKTJ1, "get_dst_portx4 res %d:%d:%d:%d\n",
+		plog(DEBUG, PKTJ1, "get_dst_portx4 res %d:%d:%d:%d\n",
 			neighbor[0], neighbor[1], neighbor[2], neighbor[3]);
 	}
 }
@@ -746,7 +774,7 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 		process = !qconf->neighbor4_struct->entries.t4[dst_port[j]]    \
 			       .neighbor.valid ||                              \
 			  action == NEI_ACTION_KNI;                            \
-		RTE_LOG(DEBUG, PKTJ1,                                          \
+		plog(DEBUG, PKTJ1,                                          \
 			#step ": j %d process %d dst_port %d ipv4\n", j,       \
 			process, dst_port[j]);                                 \
 	} else if (PKTJ_TEST_IPV6_HDR(pkt[j])) {                               \
@@ -756,13 +784,13 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 		process = !qconf->neighbor6_struct->entries.t6[dst_port[j]]    \
 			       .neighbor.valid ||                              \
 			  action == NEI_ACTION_KNI;                            \
-		RTE_LOG(DEBUG, PKTJ1, #step ": j %d process %d ipv6\n", j,     \
+		plog(DEBUG, PKTJ1, #step ": j %d process %d ipv6\n", j,     \
 			process);                                              \
 	} else {                                                               \
 		is_ipv4 = 0;                                                   \
 		process = 1;                                                   \
 		action = NEI_ACTION_KNI;                                       \
-		RTE_LOG(                                                       \
+		plog(                                                       \
 		    DEBUG, PKTJ1,                                              \
 		    #step ": j %d process %d olflags%lx eth_type %x\n", j,     \
 		    process, pkt[j]->ol_flags,                                 \
@@ -792,7 +820,7 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 			pkt[j] = pkt[nb_rx];                                   \
 			dst_port[j] = dst_port[nb_rx];                         \
 		}                                                              \
-		RTE_LOG(DEBUG, PKTJ1, #step                                    \
+		plog(DEBUG, PKTJ1, #step                                    \
 			": j %d nb_rx %d i %d dst_port %d lcore_id %d\n",      \
 			j, nb_rx, i, dst_port[j], lcore_id);                   \
 	} else {                                                               \
@@ -824,7 +852,7 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 		} else {                                                       \
 			pkt[j]->vlan_tci = vlan_tci;                           \
 			pkt[j]->ol_flags |= PKT_TX_VLAN_PKT;                   \
-			RTE_LOG(DEBUG, PKTJ1, #step ": olflags%lx vlan%d\n",   \
+			plog(DEBUG, PKTJ1, #step ": olflags%lx vlan%d\n",   \
 				pkt[j]->ol_flags, vlan_tci);                   \
 			j++;                                                   \
 		}                                                              \
@@ -837,12 +865,16 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 	switch (nb_rx % FWDSTEP) {
 		while (j < nb_rx) {
 			i = 0;  // reinit i here after the first duck device
+			/* Falls through. */
 		case 0:
 			PROCESSX4_STEP(0);
+			/* Falls through. */
 		case 3:
 			PROCESSX4_STEP(3);
+			/* Falls through. */
 		case 2:
 			PROCESSX4_STEP(2);
+			/* Falls through. */
 		case 1:
 			PROCESSX4_STEP(1);
 
@@ -851,8 +883,11 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 
 			for (k = 0; k < nb_kni; k++) {
 				int l = 0;
-				for (; l < i; ++l)
+				for (; l < i; ++l) {
+					dump_packet(knimbuf[l]);
 					rte_vlan_insert(knimbuf + l);
+				}
+
 				rte_spinlock_lock(&spinlock_kni[portid]);
 				num = rte_kni_tx_burst(p->kni[k], knimbuf, i);
 				rte_spinlock_unlock(&spinlock_kni[portid]);
@@ -860,20 +895,17 @@ processx4_step_checkneighbor(struct lcore_conf* qconf,
 				if (unlikely(num < i)) {
 					/* Free mbufs not tx to kni interface */
 					if (num > 0)
-						kni_burst_free_mbufs(
-						    &knimbuf[num], i - num);
+						kni_burst_free_mbufs(&knimbuf[num], i - num);
 					else
-						kni_burst_free_mbufs(
-						    &knimbuf[0], i);
+						kni_burst_free_mbufs( &knimbuf[0], i);
 				}
+
 #if 0
-				RTE_LOG(ERR, KNI, "%s:%d:eth%d(%d)->kni%d(%d)\n", __FUNCTION__, __LINE__, 
-						portid, i, k, num);
+				plog(ERR, KNI, "eth%d(%d)->kni%d(%d)\n", portid, i, k, num); 
 #endif
-				RTE_LOG(
-				    DEBUG, PKTJ1,
-				    "k %d nb_rx %d i %d num %d lcore_id %d\n",
-				    k, nb_rx, i, num, lcore_id);
+				plog(DEBUG, PKTJ1, "KNI: k %d nb_rx %d i %d num %d lcore_id %d\n", 
+					 k, nb_rx, i, num, lcore_id);
+
 			}
 		}  // while loop end
 	}
@@ -1174,8 +1206,10 @@ prepare_acl_parameter(struct rte_mbuf** pkts_in,
 		while (nb_rx != i) {
 		case 0:
 			PREFETCH();
+			/* Falls through. */
 		case 2:
 			PREFETCH();
+			/* Falls through. */
 		case 1:
 			PREFETCH();
 
@@ -1320,6 +1354,7 @@ rte_atomic64_cmpswap(volatile uintptr_t* dst, uintptr_t* exp, uintptr_t src)
 		lp[0] = 1;                                 \
 	}                                                  \
 	j++;
+
 #define PROCESS_STEP3_2()                                  \
 	process_step3(qconf, pkts_burst[j], &dst_port[j]); \
 	if (likely((dlp) == dst_port[j])) {                \
@@ -1327,6 +1362,57 @@ rte_atomic64_cmpswap(volatile uintptr_t* dst, uintptr_t* exp, uintptr_t src)
 	} else {                                           \
 		pnum[j] = 1;                               \
 	}
+
+
+void drain_tx_queue(struct lcore_conf* qconf, uint64_t cur_tsc, uint64_t *rate_tsc, uint64_t ticks_per_s)
+{
+	uint8_t portid;
+
+	/*
+	 * This could be optimized (use queueid instead of
+	 * portid), but it is not called so often
+	 */
+	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
+		if (qconf->tx_mbufs[portid].len == 0)
+			continue;
+
+		send_burst(qconf, qconf->tx_mbufs[portid].len, portid);
+		qconf->tx_mbufs[portid].len = 0;
+	}
+
+	uint64_t sec = cur_tsc / ticks_per_s;
+	if (sec > *rate_tsc) {
+		*rate_tsc = sec;
+
+		// reset rate limit counters
+		qconf->kni_rate_limit_cur = 0;
+
+		memset(qconf->rlimit6_cur, 0, sizeof(qconf->rlimit6_cur));
+		memset(qconf->rlimit4_cur, 0, sizeof(qconf->rlimit4_cur));
+	}
+}
+
+int packet_classify(struct lcore_conf* qconf, struct rte_mbuf** pkts_burst, uint32_t lcore_id, int nb_rx)
+{
+	struct acl_search_t acl_search;
+
+	prepare_acl_parameter(pkts_burst, &acl_search, nb_rx);
+
+	if (likely(qconf->cur_acx_ipv4 && acl_search.num_ipv4)) {
+		rte_acl_classify(qconf->cur_acx_ipv4, acl_search.data_ipv4, 
+						 acl_search.res_ipv4, acl_search.num_ipv4, DEFAULT_MAX_CATEGORIES);
+	}
+
+	if (likely(qconf->cur_acx_ipv6 && acl_search.num_ipv6)) {
+		rte_acl_classify(qconf->cur_acx_ipv6, acl_search.data_ipv6, 
+						 acl_search.res_ipv6, acl_search.num_ipv6, DEFAULT_MAX_CATEGORIES);
+	}
+
+	nb_rx = filter_packets(lcore_id, pkts_burst, &acl_search, nb_rx, 
+						   qconf->cur_acx_ipv4, qconf->cur_acx_ipv6);
+
+	return nb_rx;
+}
 
 /* main processing loop */
 static int
@@ -1338,8 +1424,7 @@ main_loop(__rte_unused void* dummy)
 	int i, j, nb_rx;
 	uint8_t portid = 0, queueid;
 	struct lcore_conf* qconf;
-	const uint64_t drain_tsc =
-	    (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * BURST_TX_DRAIN_US;
+	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * BURST_TX_DRAIN_US;
 	const uint64_t ticks_per_s = rte_get_tsc_hz();
 	int32_t k;
 	int32_t f_stop;
@@ -1359,25 +1444,25 @@ main_loop(__rte_unused void* dummy)
 	qconf = &lcore_conf[lcore_id];
 
 	if (qconf->n_rx_queue == 0) {
-		RTE_LOG(INFO, PKTJ1, "lcore %u has nothing to do\n", lcore_id);
+		plog(INFO, PKTJ1, "lcore %u has nothing to do\n", lcore_id);
 		return 0;
 	}
 
-	RTE_LOG(INFO, PKTJ1, "entering main loop on lcore %u\n", lcore_id);
+	plog(INFO, PKTJ1, "entering main loop on lcore %u\n", lcore_id);
 
 	for (i = 0; i < qconf->n_rx_queue; i++) {
 		portid = qconf->rx_queue_list[i].port_id;
 		stats[lcore_id].port_id = portid;
 		queueid = qconf->rx_queue_list[i].queue_id;
-		RTE_LOG(INFO, PKTJ1,
-			" -- lcoreid=%u portid=%hhu rxqueueid=%hhu\n", lcore_id,
-			portid, queueid);
+		plog(INFO, PKTJ1, " -- lcoreid=%u portid=%hhu rxqueueid=%hhu\n", 
+				lcore_id, portid, queueid);
 	}
 
 	while (1) {
 		f_stop = rte_atomic32_read(&main_loop_stop);
 		if (unlikely(f_stop))
 			break;
+
 		stats[lcore_id].nb_iteration_looped++;
 		cur_tsc = glob_tsc[lcore_id];
 
@@ -1389,31 +1474,7 @@ main_loop(__rte_unused void* dummy)
 		 */
 		diff_tsc = cur_tsc - prev_tsc;
 		if (unlikely(diff_tsc > drain_tsc)) {
-			/*
-			 * This could be optimized (use queueid instead of
-			 * portid), but it is not called so often
-			 */
-			for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
-				if (qconf->tx_mbufs[portid].len == 0)
-					continue;
-				send_burst(qconf, qconf->tx_mbufs[portid].len,
-					   portid);
-				qconf->tx_mbufs[portid].len = 0;
-			}
-
-			uint64_t sec = cur_tsc / ticks_per_s;
-			if (sec > rate_tsc) {
-				rate_tsc = sec;
-
-				// reset rate limit counters
-				qconf->kni_rate_limit_cur = 0;
-
-				memset(qconf->rlimit6_cur, 0,
-				       sizeof(qconf->rlimit6_cur));
-				memset(qconf->rlimit4_cur, 0,
-				       sizeof(qconf->rlimit4_cur));
-			}
-
+			drain_tx_queue(qconf, cur_tsc, &rate_tsc, ticks_per_s);
 			prev_tsc = cur_tsc;
 		}
 
@@ -1423,88 +1484,58 @@ main_loop(__rte_unused void* dummy)
 		for (i = 0; i < qconf->n_rx_queue; ++i) {
 			portid = qconf->rx_queue_list[i].port_id;
 			queueid = qconf->rx_queue_list[i].queue_id;
-			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst,
-						 MAX_PKT_BURST);
+			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst, MAX_PKT_BURST);
+
 			if (unlikely(nb_rx == 0))
 				continue;
 
-			RTE_LOG(DEBUG, PKTJ1,
-				"main_loop nb_rx %d  queue_id %d\n", nb_rx,
-				queueid);
+			plog(DEBUG, PKTJ1, "#### main_loop: nb_rx:%d  Q:%d P:%d \n", nb_rx, queueid, portid);
+
 			stats[lcore_id].nb_rx += nb_rx;
-			{
-				struct acl_search_t acl_search;
+			nb_rx =  packet_classify(qconf, pkts_burst, lcore_id, nb_rx);
 
-				prepare_acl_parameter(pkts_burst, &acl_search,
-						      nb_rx);
-
-				if (likely(qconf->cur_acx_ipv4 &&
-					   acl_search.num_ipv4)) {
-					rte_acl_classify(
-					    qconf->cur_acx_ipv4,
-					    acl_search.data_ipv4,
-					    acl_search.res_ipv4,
-					    acl_search.num_ipv4,
-					    DEFAULT_MAX_CATEGORIES);
-				}
-
-				if (likely(qconf->cur_acx_ipv6 &&
-					   acl_search.num_ipv6)) {
-					rte_acl_classify(
-					    qconf->cur_acx_ipv6,
-					    acl_search.data_ipv6,
-					    acl_search.res_ipv6,
-					    acl_search.num_ipv6,
-					    DEFAULT_MAX_CATEGORIES);
-				}
-				nb_rx = filter_packets(
-				    lcore_id, pkts_burst, &acl_search, nb_rx,
-				    qconf->cur_acx_ipv4, qconf->cur_acx_ipv6);
-			}
 			if (unlikely(nb_rx == 0))
 				continue;
 
 			/* Process up to last 3 packets one by one. */
-			RTE_LOG(DEBUG, PKTJ1,
-				"main_loop acl nb_rx %d  queue_id %d\n", nb_rx,
-				queueid);
+			plog(DEBUG, PKTJ1, "ACL nb_rx:%d  Q:%d\n", nb_rx, queueid);
 
 			switch (nb_rx % FWDSTEP) {
 			case 3:
-				PROCESS_STEP2(3);
+				//PROCESS_STEP2(3);
+				process_step2(qconf, pkts_burst[nb_rx - 3], dst_port + nb_rx - 3);
+				/* Falls through. */
 			case 2:
-				PROCESS_STEP2(2);
+				//PROCESS_STEP2(2);
+				process_step2(qconf, pkts_burst[nb_rx - 2], dst_port + nb_rx - 2);
+				/* Falls through. */
 			case 1:
-				PROCESS_STEP2(1);
+				//PROCESS_STEP2(1);
+				process_step2(qconf, pkts_burst[nb_rx - 1], dst_port + nb_rx - 1);
 			}
 
 #if 0
 			if (nb_rx > 0) {
 				for (j = 0; j < nb_rx; j ++) {
-					dump_packet(pkts_burst[j], 1);
+					dump_packet(pkts_burst[j]);
 				}
 			}
 #endif
 
 			k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
 			for (j = 0; j != k; j += FWDSTEP) {
-				processx4_step1(&pkts_burst[j],
-						&dip[j / FWDSTEP],
-						&flag[j / FWDSTEP]);
+				processx4_step1(&pkts_burst[j], &dip[j / FWDSTEP], &flag[j / FWDSTEP]);
 			}
 
 			k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
 			for (j = 0; j != k; j += FWDSTEP) {
-				processx4_step2(
-				    qconf, dip[j / FWDSTEP], flag[j / FWDSTEP],
-				    &pkts_burst[j], portid, &dst_port[j]);
+				processx4_step2(qconf, dip[j / FWDSTEP], flag[j / FWDSTEP], 
+								&pkts_burst[j], portid, &dst_port[j]);
 			}
 
 			// send through the kni packets which don't have an
 			// available neighbor
-			nb_rx = processx4_step_checkneighbor(qconf, pkts_burst,
-							     dst_port, nb_rx,
-							     portid, lcore_id);
+			nb_rx = processx4_step_checkneighbor(qconf, pkts_burst, dst_port, nb_rx, portid, lcore_id);
 
 			/*
 			 * Finish packet processing and group consecutive
@@ -1523,34 +1554,27 @@ main_loop(__rte_unused void* dummy)
 				dp1 = _mm_loadu_si128((__m128i*)dst_port);
 
 				for (j = FWDSTEP; j != k; j += FWDSTEP) {
-					processx4_step3(qconf, &pkts_burst[j],
-							&dst_port[j]);
+					processx4_step3(qconf, &pkts_burst[j], &dst_port[j]);
 
 					/*
 					 * dp2:
 					 * <d[j-3], d[j-2], d[j-1], d[j], ... >
 					 */
-					dp2 = _mm_loadu_si128(
-					    (__m128i*)&dst_port[j - FWDSTEP +
-								1]);
-					lp = port_groupx4(&pnum[j - FWDSTEP],
-							  lp, dp1, dp2);
+					dp2 = _mm_loadu_si128((__m128i*)&dst_port[j - FWDSTEP + 1]);
+					lp = port_groupx4(&pnum[j - FWDSTEP], lp, dp1, dp2);
 
 					/*
 					 * dp1:
 					 * <d[j], d[j+1], d[j+2], d[j+3], ... >
 					 */
-					dp1 = _mm_srli_si128(
-					    dp2, (FWDSTEP - 1) *
-						     sizeof(dst_port[0]));
+					dp1 = _mm_srli_si128(dp2, (FWDSTEP - 1) * sizeof(dst_port[0]));
 				}
 
 				/*
 				 * dp2: <d[j-3], d[j-2], d[j-1], d[j-1], ... >
 				 */
 				dp2 = _mm_shufflelo_epi16(dp1, 0xf9);
-				lp = port_groupx4(&pnum[j - FWDSTEP], lp, dp1,
-						  dp2);
+				lp = port_groupx4(&pnum[j - FWDSTEP], lp, dp1, dp2);
 
 				/*
 				 * remove values added by the last repeated
@@ -1558,7 +1582,8 @@ main_loop(__rte_unused void* dummy)
 				 */
 				lp[0]--;
 				dlp = dst_port[j - 1];
-			} else {
+			} 
+			else {
 				/* set dlp and lp to the never used values. */
 				dlp = BAD_PORT - 1;
 				lp = pnum + MAX_PKT_BURST;
@@ -1569,8 +1594,10 @@ main_loop(__rte_unused void* dummy)
 			switch (nb_rx % FWDSTEP) {
 			case 3:
 				PROCESS_STEP3_1();
+				/* Falls through. */
 			case 2:
 				PROCESS_STEP3_1();
+				/* Falls through. */
 			case 1:
 				PROCESS_STEP3_2();
 			}
@@ -1591,9 +1618,9 @@ main_loop(__rte_unused void* dummy)
 
 				if (likely(pn != BAD_PORT)) {
 					stats[lcore_id].nb_tx += k;
-					send_packetsx4(qconf, pn,
-						       pkts_burst + j, k);
-				} else {
+					send_packetsx4(qconf, pn, pkts_burst + j, k);
+				} 
+				else {
 					stats[lcore_id].nb_dropped += k;
 					for (m = j; m != j + k; m++)
 						rte_pktmbuf_free(pkts_burst[m]);
@@ -1614,13 +1641,13 @@ check_lcore_params(void)
 	for (i = 0; i < nb_lcore_params; ++i) {
 		queue = lcore_params[i].queue_id;
 		if (queue >= MAX_RX_QUEUE_PER_PORT) {
-			RTE_LOG(ERR, PKTJ1, "invalid queue number: %hhu\n",
+			plog(ERR, PKTJ1, "invalid queue number: %hhu\n",
 				queue);
 			return -1;
 		}
 		lcore = lcore_params[i].lcore_id;
 		if (!rte_lcore_is_enabled(lcore)) {
-			RTE_LOG(
+			plog(
 			    ERR, PKTJ1,
 			    "error: lcore %hhu is not enabled in lcore mask\n",
 			    lcore);
@@ -1628,7 +1655,7 @@ check_lcore_params(void)
 		}
 		if ((socketid = rte_lcore_to_socket_id(lcore) != 0) &&
 		    (numa_on == 0)) {
-			RTE_LOG(WARNING, PKTJ1,
+			plog(WARNING, PKTJ1,
 				"warning: lcore %hhu is on "
 				"socket %d with numa off \n",
 				lcore, socketid);
@@ -1646,13 +1673,13 @@ check_port_config(const unsigned nb_ports)
 	for (i = 0; i < nb_lcore_params; ++i) {
 		portid = lcore_params[i].port_id;
 		if ((enabled_port_mask & (1 << portid)) == 0) {
-			RTE_LOG(ERR, PKTJ1,
+			plog(ERR, PKTJ1,
 				"port %u is not enabled in port mask\n",
 				portid);
 			return -1;
 		}
 		if (portid >= nb_ports) {
-			RTE_LOG(ERR, PKTJ1,
+			plog(ERR, PKTJ1,
 				"port %u is not present on the board\n",
 				portid);
 			return -1;
@@ -1697,7 +1724,7 @@ init_lcore_rx_queues(void)
 		lcore = lcore_params[i].lcore_id;
 		nb_rx_queue = lcore_conf[lcore].n_rx_queue;
 		if (nb_rx_queue >= MAX_RX_QUEUE_PER_LCORE) {
-			RTE_LOG(ERR, PKTJ1,
+			plog(ERR, PKTJ1,
 				"error: too many queues (%u) for lcore: %u\n",
 				(unsigned)nb_rx_queue + 1, (unsigned)lcore);
 			return -1;
@@ -1804,7 +1831,7 @@ init_mem(uint8_t nb_ports)
 					 "Cannot init mbuf pool on socket %d\n",
 					 socketid);
 			else
-				RTE_LOG(INFO, PKTJ1,
+				plog(INFO, PKTJ1,
 					"Allocated mbuf pool on socket %d\n",
 					socketid);
 
@@ -1821,7 +1848,7 @@ init_mem(uint8_t nb_ports)
 				    "Cannot init kni mbuf pool on socket %d\n",
 				    socketid);
 			else
-				RTE_LOG(
+				plog(
 				    INFO, PKTJ1,
 				    "Allocated kni mbuf pool on socket %d\n",
 				    socketid);
@@ -1849,7 +1876,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 	uint8_t portid, count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 
-	RTE_LOG(INFO, PKTJ1, "\nChecking link status\n");
+	plog(INFO, PKTJ1, "\nChecking link status\n");
 	for (count = 0; count <= MAX_CHECK_TIME; count++) {
 		all_ports_up = 1;
 		for (portid = 0; portid < port_num; portid++) {
@@ -1860,7 +1887,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
-					RTE_LOG(INFO, PKTJ1,
+					plog(INFO, PKTJ1,
 						"Port %d Link Up - speed %u "
 						"Mbps - %s\n",
 						(uint8_t)portid,
@@ -1870,7 +1897,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 						    ? ("full-duplex")
 						    : ("half-duplex\n"));
 				else
-					RTE_LOG(INFO, PKTJ1,
+					plog(INFO, PKTJ1,
 						"Port %d Link Down\n",
 						(uint8_t)portid);
 				continue;
@@ -1886,7 +1913,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			break;
 
 		if (all_ports_up == 0) {
-			RTE_LOG(INFO, PKTJ1, ".");
+			plog(INFO, PKTJ1, ".");
 			fflush(stdout);
 			rte_delay_ms(CHECK_INTERVAL);
 		}
@@ -1894,7 +1921,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 		/* set the print_flag if all ports up or timeout */
 		if (all_ports_up == 1 || count == (MAX_CHECK_TIME - 1)) {
 			print_flag = 1;
-			RTE_LOG(INFO, PKTJ1, "done\n");
+			plog(INFO, PKTJ1, "done\n");
 		}
 	}
 }
@@ -1913,26 +1940,23 @@ init_port(uint8_t portid)
 
 	/* skip ports that are not enabled */
 	if ((enabled_port_mask & (1 << portid)) == 0) {
-		RTE_LOG(INFO, PKTJ1, "\nSkipping disabled port %d\n", portid);
+		plog(INFO, PKTJ1, "\nSkipping disabled port %d\n", portid);
 		return;
 	}
 
 	/* init port */
-	RTE_LOG(INFO, PKTJ1, "Initializing port %d ...\n", portid);
+	plog(INFO, PKTJ1, "Initializing port %d ...\n", portid);
 
 	nb_rx_queue = get_port_n_rx_queues(portid);
-	// FXIME: ????
 	// XXX the +1 is for the kni
-	nb_tx_queue = nb_rx_queue + 1;
-	RTE_LOG(INFO, PKTJ1, "Creating queues: nb_rxq=%d nb_txq=%u...\n",
-		nb_rx_queue, nb_tx_queue);
+	//nb_tx_queue = nb_rx_queue + 1;
+	nb_tx_queue = nb_rx_queue;
 
-	ret =
-	    rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue, &port_conf);
+	plog(INFO, PKTJ1, "Creating queues: nb_rxq=%d nb_txq=%u...\n", nb_rx_queue, nb_tx_queue);
+
+	ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue, &port_conf);
 	if (ret < 0)
-		rte_exit(EXIT_FAILURE,
-			 "Cannot configure device: err=%d, port=%u\n", ret,
-			 portid);
+		rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n", ret, portid);
 
 	/*
 	 * prepare dst and src MACs for each port.
@@ -1953,23 +1977,17 @@ init_port(uint8_t portid)
 	if (port_conf.rxmode.jumbo_frame)
 		txconf->txq_flags = 0;
 
-	printf("port=%u tx_queueid=%d nb_txd=%d kni\n", portid, nb_tx_queue,
-	       nb_txd);
-
+#if 0
 	// XXX kni tx queue
 	if (numa_on)
-		socketid = (uint8_t)rte_lcore_to_socket_id(
-		    kni_port_params_array[portid]->lcore_tx);
+		socketid = (uint8_t)rte_lcore_to_socket_id(kni_port_params_array[portid]->lcore_tx);
 	else
 		socketid = 0;
 
-	ret = rte_eth_tx_queue_setup(portid, nb_tx_queue - 1, nb_txd, socketid,
-				     txconf);
+	ret = rte_eth_tx_queue_setup(portid, /*nb_tx_queue - 1*/ nb_tx_queue, nb_txd, socketid, txconf);
 	if (ret < 0)
-		rte_exit(EXIT_FAILURE,
-			 "rte_eth_tx_queue_setup: err=%d, "
-			 "port=%u\n",
-			 ret, portid);
+		rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: err=%d, " "port=%u\n", ret, portid);
+#endif
 
 	nb_tx_queue = 0;
 	/* init one TX queue per couple (lcore,port) */
@@ -1994,17 +2012,14 @@ init_port(uint8_t portid)
 			}
 			queueid = qconf->rx_queue_list[queue].queue_id;
 
-			RTE_LOG(DEBUG, PKTJ1,
-				"port=%u rx_queueid=%d nb_rxd=%d core=%u\n",
+			plog(DEBUG, PKTJ1, "port=%u rx_queueid=%d nb_rxd=%d core=%u\n",
 				portid, queueid, nb_rxd, lcore_id);
+
 			ret = rte_eth_rx_queue_setup(portid, queueid, nb_rxd,
 						     socketid, NULL,
 						     pktmbuf_pool[socketid]);
 			if (ret < 0)
-				rte_exit(EXIT_FAILURE,
-					 "rte_eth_rx_queue_setup: err=%d,"
-					 "port=%u\n",
-					 ret, portid);
+				rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup: err=%d," "port=%u\n", ret, portid);
 		}
 		if (queueid == -1) {
 			// no rx_queue set, don't need to setup tx_queue for
@@ -2012,10 +2027,7 @@ init_port(uint8_t portid)
 			continue;
 		}
 
-		RTE_LOG(
-		    INFO, PKTJ1,
-		    "\nInitializing rx/tx queues on lcore %u for port %u ...\n",
-		    lcore_id, portid);
+		plog(INFO, PKTJ1, "\nInitializing rx/tx queues on lcore %u for port %u ...\n", lcore_id, portid);
 
 		rte_eth_dev_info_get(portid, &dev_info);
 		txconf = &dev_info.default_txconf;
@@ -2030,16 +2042,11 @@ init_port(uint8_t portid)
 		if (port_conf.rxmode.jumbo_frame)
 			txconf->txq_flags = 0;
 
-		RTE_LOG(DEBUG, PKTJ1,
-			"port=%u tx_queueid=%d nb_txd=%d core=%u\n", portid,
-			nb_tx_queue, nb_txd, lcore_id);
-		ret = rte_eth_tx_queue_setup(portid, nb_tx_queue, nb_txd,
-					     socketid, txconf);
+		plog(DEBUG, PKTJ1, "port=%u tx_queueid=%d nb_txd=%d core=%u\n", portid, nb_tx_queue, nb_txd, lcore_id);
+
+		ret = rte_eth_tx_queue_setup(portid, nb_tx_queue, nb_txd, socketid, txconf);
 		if (ret < 0)
-			rte_exit(EXIT_FAILURE,
-				 "rte_eth_tx_queue_setup: err=%d, "
-				 "port=%u\n",
-				 ret, portid);
+			rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: err=%d, " "port=%u\n", ret, portid);
 
 		qconf->tx_queue_id[portid] = nb_tx_queue++;
 	}
@@ -2087,7 +2094,7 @@ signal_handler(int signum,
 	/* When we receive a RTMIN or SIGINT signal, stop kni processing */
 	if (signum == SIGRTMIN || signum == SIGINT || signum == SIGQUIT ||
 	    signum == SIGTERM) {
-		RTE_LOG(INFO, PKTJ1,
+		plog(INFO, PKTJ1,
 			"SIG %d is received, and the KNI processing is "
 			"going to stop\n",
 			signum);
@@ -2104,7 +2111,7 @@ signal_handler(int signum,
 	} else if (signum == SIGCHLD) {
 		int pid, status;
 		if ((pid = wait(&status)) > 0) {
-			RTE_LOG(INFO, PKTJ1,
+			plog(INFO, PKTJ1,
 				"SIGCHLD received, reaped child "
 				"pid: %d status %d\n",
 				pid, WEXITSTATUS(status));
@@ -2145,7 +2152,7 @@ spawn_management_threads(uint32_t ctrlsock,
 
 	lcore_id = control_handle4[ctrlsock].lcore_id;
 
-	RTE_LOG(INFO, PKTJ1,
+	plog(INFO, PKTJ1,
 		"launching control thread for socketid "
 		"%d on lcore %u\n",
 		ctrlsock, lcore_id);
@@ -2395,6 +2402,8 @@ main(int argc, char** argv)
 	 * at ttl field */
 	mask_tcp_179 = _mm_setr_epi32(0x00000600, 0, 0, 0xb3000000);
 
+	// main_loop, kni_main_loop, control_main 
+	
 	/* launch per-lcore init on every lcore */
 	RTE_LCORE_FOREACH(lcore_id)
 	{
@@ -2415,7 +2424,7 @@ main(int argc, char** argv)
 				pthread_t kni_tid;
 				cpu_set_t cpuset;
 
-				RTE_LOG(INFO, PKTJ1,
+				plog(INFO, PKTJ1,
 					"launching kni thread on lcore %u\n",
 					lcore_id);
 				pthread_create(&kni_tid, NULL,
@@ -2455,23 +2464,23 @@ main(int argc, char** argv)
 
 	RTE_LCORE_FOREACH_SLAVE(lcore_id)
 	{
-		RTE_LOG(INFO, PKTJ1, "waiting %u\n", lcore_id);
+		plog(INFO, PKTJ1, "waiting %u\n", lcore_id);
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
-	RTE_LOG(INFO, PKTJ1, "rte_eal_wait_lcore finished\n");
+	plog(INFO, PKTJ1, "rte_eal_wait_lcore finished\n");
 
 	// childs will be handled here
 	if (signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
 		rte_exit(EXIT_FAILURE, "failed to set sigaction");
 	}
 	ret = system("pkill -SIGTERM -P $PPID");
-	RTE_LOG(INFO, PKTJ1, "killing remaining child processes: %d\n", ret);
+	plog(INFO, PKTJ1, "killing remaining child processes: %d\n", ret);
 
 	{
 		int pid, status;
 		while ((pid = wait(&status)) > 0) {
-			RTE_LOG(DEBUG, PKTJ1,
+			plog(DEBUG, PKTJ1,
 				"Reaped child pid: %d status %d\n", pid,
 				WEXITSTATUS(status));
 		}
@@ -2482,7 +2491,7 @@ main(int argc, char** argv)
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			continue;
 		}
-		RTE_LOG(INFO, PKTJ1, "freeing kniportid %d\n", portid);
+		plog(INFO, PKTJ1, "freeing kniportid %d\n", portid);
 		kni_free_kni(portid);
 		rte_eth_dev_stop(portid);
 	}

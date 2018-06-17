@@ -14,7 +14,7 @@ SRCS-y += cmdline_helpers.c
 
 #CFLAGS += -I$(RTE_SRCDIR)/include
 
-CFLAGS += $(WERROR_FLAGS)
+CFLAGS += $(WERROR_FLAGS) -Wno-missing-prototypes -Wno-missing-declarations #-Wimplicit-fallthrough=0
 CFLAGS += -I$(RTE_SDK)/$(RTE_TARGET)/include
 CFLAGS += -I$(RTE_SRCDIR)/../lib/libneighbour/
 CFLAGS += -I$(RTE_SRCDIR)/../lib/libnetlink/
