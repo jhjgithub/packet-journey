@@ -1231,7 +1231,9 @@ cmd_dump_lpm_parsed(void				*parsed_result,
 		cmdline_printf(cl, "failed to open file %s\n", res->path);
 		return;
 	}
+
 	is_ipv4 = !strcmp(res->proto, "ipv4");
+
 	if (is_ipv4) {
 		struct rte_lpm *t = ipv4_pktj_lookup_struct[RTE_PER_LCORE(g_socket_id)];
 		fwrite(t, sizeof(*t), 1, flpm);
@@ -1246,7 +1248,7 @@ cmd_dump_lpm_parsed(void				*parsed_result,
 }
 
 cmdline_parse_token_string_t cmd_dump_lpm_lpm =
-	TOKEN_STRING_INITIALIZER(struct cmd_dump_lpm_result, lpm, "lpm");
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_lpm_result, lpm, "dump_lpm");
 cmdline_parse_token_string_t cmd_dump_lpm_proto =
 	TOKEN_STRING_INITIALIZER(struct cmd_dump_lpm_result, proto, "ipv4#ipv6");
 cmdline_parse_token_string_t cmd_dump_lpm_path =
@@ -1300,7 +1302,7 @@ cmd_dump_neigh_parsed(void				*parsed_result,
 }
 
 cmdline_parse_token_string_t cmd_dump_neigh_neigh =
-	TOKEN_STRING_INITIALIZER(struct cmd_dump_neigh_result, neigh, "neigh");
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_neigh_result, neigh, "dump_neigh");
 cmdline_parse_token_string_t cmd_dump_neigh_proto =
 	TOKEN_STRING_INITIALIZER(struct cmd_dump_neigh_result, proto, "ipv4#ipv6");
 cmdline_parse_token_string_t cmd_dump_neigh_path =
