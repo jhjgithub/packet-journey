@@ -130,6 +130,7 @@ extern uint32_t rlimit6_max[NB_SOCKETS][NEI_NUM_ENTRIES];
 #define CMD_LINE_OPT_CONFIGFILE "configfile"
 #define CMD_LINE_OPT_KNI_RATE_LIMIT "kni_rate_limit"
 #define CMD_LINE_OPT_RATE_LIMIT "rate_limit"
+#define CMD_LINE_OPT_LOGFILE 	"logfile"
 
 #define FILE_MAIN_CONFIG "pktj"
 

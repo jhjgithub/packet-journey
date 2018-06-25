@@ -405,13 +405,13 @@ int netl_listen(struct netl_handle *h, void *args)
 			}
 
 			msg_count = 0;
-			h->cb.log("Parsing netlink msg", RTE_LOG_INFO);
+			//h->cb.log("Parsing netlink msg", RTE_LOG_DEBUG);
 			for (hdr = (struct nlmsghdr *) buf;
 				 (size_t) status >= sizeof(*hdr);) {
 				len = hdr->nlmsg_len;
 
-				snprintf(logmsg, 256, "Processing netlink msg of %d length", len);
-				h->cb.log(logmsg, RTE_LOG_INFO);
+				//snprintf(logmsg, 256, "Processing netlink msg of %d length", len);
+				//h->cb.log(logmsg, RTE_LOG_DEBUG);
 
 				err = netl_handler(h, &nladdr, hdr, args);
 				if (err < 0)
@@ -422,9 +422,9 @@ int netl_listen(struct netl_handle *h, void *args)
 				hdr =
 					(struct nlmsghdr *) ((char *) hdr + NLMSG_ALIGN(len));
 			}
-			snprintf(logmsg, 256, "processed %d netlink msg in buffer",
-					msg_count);
-			h->cb.log(logmsg, RTE_LOG_INFO);
+
+			//snprintf(logmsg, 256, "processed %d netlink msg in buffer", msg_count);
+			h->cb.log(logmsg, RTE_LOG_DEBUG);
 
 			if (status) {
 				h->cb.log("Remnant data not read", RTE_LOG_ERR);

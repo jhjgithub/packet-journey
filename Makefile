@@ -26,9 +26,9 @@ export EXTRA_CFLAGS
 
 DIRS-y += lib
 DIRS-y += app
-DIRS-y += tests
+#DIRS-y += tests
 
-DEPDIRS-tests = lib
+#DEPDIRS-tests = lib
 
 .PHONY: default
 default: all

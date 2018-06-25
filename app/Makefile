@@ -22,7 +22,14 @@ CFLAGS += -I$(RTE_SRCDIR)/../lib/libnetlink/
 DEPDIR-y += lib/libnetlink lib/libneighbour
 
 LDFLAGS += -lc -lpthread -ldl
-LDFLAGS += -L$(BASE_OUTPUT)/lib/libneighbour/$(RTE_TARGET)/lib -L$(BASE_OUTPUT)/lib/libnetlink/$(RTE_TARGET)/lib -lneighbour -lnetlink
+LDFLAGS += -lneighbour -lnetlink
+
+ifeq ($(BASE_OUTPUT),)
+	BASE_OUTPUT=/root/packet-journey/build
+endif
+LDFLAGS += -L$(BASE_OUTPUT)/lib/libneighbour/$(RTE_TARGET)/lib 
+LDFLAGS += -L$(BASE_OUTPUT)/lib/libnetlink/$(RTE_TARGET)/lib 
+
 ifeq ($(BUILD_TARGET),qemu)
 	LDFLAGS += --wrap=virtio_recv_mergeable_pkts
 endif
@@ -37,5 +44,12 @@ endif
 .PHONY: default test
 default: all
 test:
+
+custom:
+	cd ..;ctags -R      
+
+format:
+	 uncrustify --no-backup --mtime -c ./formatter.cfg $(SRCS-y)
+#	 uncrustify --no-backup --mtime -c ./formatter.cfg main.c
 
 include $(RTE_SDK)/mk/rte.extapp.mk

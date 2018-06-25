@@ -124,11 +124,12 @@
 	"\n====================================================\n"
 
 static void
-print_ethaddr(struct cmdline* cl,
-	      const char* name,
-	      const struct ether_addr* eth_addr)
+print_ethaddr(struct cmdline			*cl,
+			  const char				*name,
+			  const struct ether_addr	*eth_addr)
 {
 	char buf[ETHER_ADDR_FMT_SIZE];
+
 	ether_format_addr(buf, ETHER_ADDR_FMT_SIZE, eth_addr);
 	cmdline_printf(cl, "%s%s\n", name, buf);
 }
@@ -139,11 +140,11 @@ print_ethaddr(struct cmdline* cl,
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 
 void
-pktj_stats_display(struct cmdline* cl, int option, int delay)
+pktj_stats_display(struct cmdline *cl, int option, int delay)
 {
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
 	uint64_t total_packets_kni_tx, total_packets_kni_rx,
-	    total_packets_kni_dropped;
+			 total_packets_kni_dropped;
 	uint64_t total_packets_ratel_dropped, total_packets_acl_dropped;
 	unsigned lcoreid;
 	time_t _time;
@@ -163,12 +164,14 @@ pktj_stats_display(struct cmdline* cl, int option, int delay)
 		fmt_lcore = STATS_JSON_LCORE;
 		fmt_mid = STATS_JSON_MID;
 		fmt_total = STATS_JSON_TOTAL;
-	} else if (option == CMD_STATS_CSV) {  // csv
+	}
+	else if (option == CMD_STATS_CSV) {    // csv
 		fmt_pre = STATS_CSV_PRE;
 		fmt_lcore = STATS_CSV_LCORE;
 		fmt_mid = STATS_CSV_MID;
 		fmt_total = STATS_CSV_TOTAL;
-	} else {
+	}
+	else {
 		fmt_pre = STATS_HUM_PRE;
 		fmt_lcore = STATS_HUM_LCORE;
 		fmt_mid = STATS_HUM_MID;
@@ -179,11 +182,11 @@ pktj_stats_display(struct cmdline* cl, int option, int delay)
 
 	for (lcoreid = 0; lcoreid < CMDLINE_MAX_CLIENTS; lcoreid++) {
 		if (cmdline_clients[RTE_PER_LCORE(g_socket_id)][lcoreid].cl ==
-		    cl) {
+			cl) {
 			cmdline_clients[RTE_PER_LCORE(g_socket_id)][lcoreid]
-			    .csv_delay = delay;
+			.csv_delay = delay;
 			cmdline_clients[RTE_PER_LCORE(g_socket_id)][lcoreid]
-			    .delay_timer = _time;
+			.delay_timer = _time;
 			break;
 		}
 	}
@@ -191,17 +194,18 @@ pktj_stats_display(struct cmdline* cl, int option, int delay)
 	cmdline_printf(cl, "%s", fmt_pre);
 
 	for (lcoreid = 0; lcoreid < RTE_MAX_LCORE; lcoreid++) {
-		if (!rte_lcore_is_enabled(lcoreid))
+		if (!rte_lcore_is_enabled(lcoreid)) {
 			continue;
+		}
 
 		cmdline_printf(
-		    cl, fmt_lcore, _time, lcoreid, stats[lcoreid].port_id,
-		    stats[lcoreid].nb_iteration_looped, stats[lcoreid].nb_tx,
-		    stats[lcoreid].nb_rx, stats[lcoreid].nb_kni_tx,
-		    stats[lcoreid].nb_kni_rx, stats[lcoreid].nb_dropped,
-		    stats[lcoreid].nb_kni_dropped,
-		    stats[lcoreid].nb_acl_dropped,
-		    stats[lcoreid].nb_ratel_dropped);
+			cl, fmt_lcore, _time, lcoreid, stats[lcoreid].port_id,
+			stats[lcoreid].nb_iteration_looped, stats[lcoreid].nb_tx,
+			stats[lcoreid].nb_rx, stats[lcoreid].nb_kni_tx,
+			stats[lcoreid].nb_kni_rx, stats[lcoreid].nb_dropped,
+			stats[lcoreid].nb_kni_dropped,
+			stats[lcoreid].nb_acl_dropped,
+			stats[lcoreid].nb_ratel_dropped);
 
 		total_packets_dropped += stats[lcoreid].nb_dropped;
 		total_packets_tx += stats[lcoreid].nb_tx;
@@ -217,191 +221,198 @@ pktj_stats_display(struct cmdline* cl, int option, int delay)
 	cmdline_printf(cl, "%s", fmt_mid);
 
 	cmdline_printf(cl, fmt_total, total_packets_tx, total_packets_rx,
-		       total_packets_kni_tx, total_packets_kni_rx,
-		       total_packets_dropped, total_packets_kni_dropped,
-		       total_packets_acl_dropped, total_packets_ratel_dropped);
+				   total_packets_kni_tx, total_packets_kni_rx,
+				   total_packets_dropped, total_packets_kni_dropped,
+				   total_packets_acl_dropped, total_packets_ratel_dropped);
 }
 
 #pragma GCC diagnostic pop
 
 void
-pktj_lpm_stats_display(struct cmdline* cl, int is_ipv4, int option)
+pktj_lpm_stats_display(struct cmdline *cl, int is_ipv4, int option)
 {
-	struct lpm_stats_t* stats;
+	struct lpm_stats_t *stats;
 
 	stats = is_ipv4 ? &lpm4_stats[RTE_PER_LCORE(g_socket_id)]
 			: &lpm6_stats[RTE_PER_LCORE(g_socket_id)];
 
 	if (option == CMD_LPM_STATS_JSON) {
 		cmdline_printf(cl,
-			       "{\"current\": %lu, \"add\": {\"success\": "
-			       "%lu, \"failure\": %lu}, \"del\": "
-			       "{\"success\": %lu, \"failure\": %lu}}\n",
-			       (stats->nb_add_ok - stats->nb_del_ok),
-			       stats->nb_add_ok, stats->nb_add_ko,
-			       stats->nb_del_ok, stats->nb_del_ko);
-	} else {
+					   "{\"current\": %lu, \"add\": {\"success\": "
+					   "%lu, \"failure\": %lu}, \"del\": "
+					   "{\"success\": %lu, \"failure\": %lu}}\n",
+					   (stats->nb_add_ok - stats->nb_del_ok),
+					   stats->nb_add_ok, stats->nb_add_ko,
+					   stats->nb_del_ok, stats->nb_del_ko);
+	}
+	else {
 		cmdline_printf(
-		    cl,
-		    "\nLPM statistics ====================================="
-		    "\nCurrent routes: %lu"
-		    "\nTotal routes added successfully: %lu"
-		    "\nTotal route add failures: %lu"
-		    "\nTotal routes deleted successfully: %lu"
-		    "\nTotal route delete failures: %lu",
-		    (stats->nb_add_ok - stats->nb_del_ok), stats->nb_add_ok,
-		    stats->nb_add_ko, stats->nb_del_ok, stats->nb_del_ko);
+			cl,
+			"\nLPM statistics ====================================="
+			"\nCurrent routes: %lu"
+			"\nTotal routes added successfully: %lu"
+			"\nTotal route add failures: %lu"
+			"\nTotal routes deleted successfully: %lu"
+			"\nTotal route delete failures: %lu",
+			(stats->nb_add_ok - stats->nb_del_ok), stats->nb_add_ok,
+			stats->nb_add_ko, stats->nb_del_ok, stats->nb_del_ko);
 		cmdline_printf(
-		    cl,
-		    "\n====================================================\n");
+			cl,
+			"\n====================================================\n");
 	}
 }
 
 void
-port_infos_display(struct cmdline* cl, portid_t port_id)
+port_infos_display(struct cmdline *cl, portid_t port_id)
 {
 	struct ether_addr mac_addr;
 	struct rte_eth_link link;
 	int vlan_offload;
-	static const char* info_border = "=====================";
+	static const char *info_border = "=====================";
 
 	rte_eth_link_get_nowait(port_id, &link);
 	cmdline_printf(cl, "\n%s Infos for port %-2d %s\n", info_border,
-		       port_id, info_border);
+				   port_id, info_border);
 	rte_eth_macaddr_get(port_id, &mac_addr);
 	print_ethaddr(cl, "MAC address: ", &mac_addr);
 
 	cmdline_printf(cl, "\nLink status: %s\n",
-		       (link.link_status) ? ("up") : ("down"));
+				   (link.link_status) ? ("up") : ("down"));
 	cmdline_printf(cl, "Link speed: %u Mbps\n", (unsigned)link.link_speed);
 	cmdline_printf(cl, "Link duplex: %s\n",
-		       (link.link_duplex == ETH_LINK_FULL_DUPLEX)
-			   ? ("full-duplex")
-			   : ("half-duplex"));
+				   (link.link_duplex == ETH_LINK_FULL_DUPLEX)
+				   ? ("full-duplex")
+				   : ("half-duplex"));
 	cmdline_printf(
-	    cl, "Promiscuous mode: %s\n",
-	    rte_eth_promiscuous_get(port_id) ? "enabled" : "disabled");
+		cl, "Promiscuous mode: %s\n",
+		rte_eth_promiscuous_get(port_id) ? "enabled" : "disabled");
 	cmdline_printf(
-	    cl, "Allmulticast mode: %s\n",
-	    rte_eth_allmulticast_get(port_id) ? "enabled" : "disabled");
+		cl, "Allmulticast mode: %s\n",
+		rte_eth_allmulticast_get(port_id) ? "enabled" : "disabled");
 
 	vlan_offload = rte_eth_dev_get_vlan_offload(port_id);
 	if (vlan_offload >= 0) {
 		cmdline_printf(cl, "VLAN offload: \n");
-		if (vlan_offload & ETH_VLAN_STRIP_OFFLOAD)
+		if (vlan_offload & ETH_VLAN_STRIP_OFFLOAD) {
 			cmdline_printf(cl, "  strip on \n");
-		else
+		}
+		else {
 			cmdline_printf(cl, "  strip off \n");
+		}
 
-		if (vlan_offload & ETH_VLAN_FILTER_OFFLOAD)
+		if (vlan_offload & ETH_VLAN_FILTER_OFFLOAD) {
 			cmdline_printf(cl, "  filter on \n");
-		else
+		}
+		else {
 			cmdline_printf(cl, "  filter off \n");
+		}
 
-		if (vlan_offload & ETH_VLAN_EXTEND_OFFLOAD)
+		if (vlan_offload & ETH_VLAN_EXTEND_OFFLOAD) {
 			cmdline_printf(cl, "  qinq(extend) on \n");
-		else
+		}
+		else {
 			cmdline_printf(cl, "  qinq(extend) off \n");
+		}
 	}
 }
 
 void
-nic_stats_display(struct cmdline* cl, portid_t port_id, int option)
+nic_stats_display(struct cmdline *cl, portid_t port_id, int option)
 {
 	struct rte_eth_stats stats;
 	uint8_t i;
 
-	static const char* nic_stats_border = "=======================";
+	static const char *nic_stats_border = "=======================";
 
 	rte_eth_stats_get(port_id, &stats);
 
 	if (option) {
 		cmdline_printf(cl,
-			       "{\"portid\": %d, "
-			       "\"rx\": {\"packets\": %" PRIu64
-			       ", \"errors\": %" PRIu64 ", \"bytes\": %" PRIu64
-			       ", "
-			       ", \"nombuf\": %" PRIu64
-			       ", "
-			       "\"tx\": {\"packets\": %" PRIu64
-			       ", \"errors\": %" PRIu64 ", \"bytes\": %" PRIu64
-			       ", ",
-			       port_id, stats.ipackets, stats.ierrors,
-			       stats.ibytes, stats.rx_nombuf, stats.opackets,
-			       stats.oerrors, stats.obytes);
+					   "{\"portid\": %d, "
+					   "\"rx\": {\"packets\": %" PRIu64
+					   ", \"errors\": %" PRIu64 ", \"bytes\": %" PRIu64
+					   ", "
+					   ", \"nombuf\": %" PRIu64
+					   ", "
+					   "\"tx\": {\"packets\": %" PRIu64
+					   ", \"errors\": %" PRIu64 ", \"bytes\": %" PRIu64
+					   ", ",
+					   port_id, stats.ipackets, stats.ierrors,
+					   stats.ibytes, stats.rx_nombuf, stats.opackets,
+					   stats.oerrors, stats.obytes);
 
 		cmdline_printf(cl, "\"queues\": [");
 
 		for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
 			cmdline_printf(cl,
-				       "{\"queueid\": %d, "
-				       "\"rx\": {\"packets\": %" PRIu64
-				       ", \"errors\": %" PRIu64
-				       ", \"bytes\": %" PRIu64
-				       "}, "
-				       "\"tx\": {\"packets\": %" PRIu64
-				       ", \"bytes\": %" PRIu64 "}}, ",
-				       i, stats.q_ipackets[i],
-				       stats.q_errors[i], stats.q_ibytes[i],
-				       stats.q_opackets[i], stats.q_obytes[i]);
+						   "{\"queueid\": %d, "
+						   "\"rx\": {\"packets\": %" PRIu64
+						   ", \"errors\": %" PRIu64
+						   ", \"bytes\": %" PRIu64
+						   "}, "
+						   "\"tx\": {\"packets\": %" PRIu64
+						   ", \"bytes\": %" PRIu64 "}}, ",
+						   i, stats.q_ipackets[i],
+						   stats.q_errors[i], stats.q_ibytes[i],
+						   stats.q_opackets[i], stats.q_obytes[i]);
 		}
 
 		// add a null object to end the array
 		cmdline_printf(cl, "{}");
 
 		cmdline_printf(cl, "]}\n");
-
-	} else {
+	}
+	else {
 		cmdline_printf(cl, "\n  %s NIC statistics for port %-2d %s\n",
-			       nic_stats_border, port_id, nic_stats_border);
+					   nic_stats_border, port_id, nic_stats_border);
 
 		cmdline_printf(cl, "  RX-packets:              %10" PRIu64
-				   "    RX-errors: %10" PRIu64
-				   "    RX-bytes: %10" PRIu64 "\n",
-			       stats.ipackets, stats.ierrors, stats.ibytes);
+					   "    RX-errors: %10" PRIu64
+					   "    RX-bytes: %10" PRIu64 "\n",
+					   stats.ipackets, stats.ierrors, stats.ibytes);
 		cmdline_printf(cl, "  RX-nombuf:               %10" PRIu64 "\n",
-			       stats.rx_nombuf);
+					   stats.rx_nombuf);
 		cmdline_printf(cl, "  TX-packets:              %10" PRIu64
-				   "    TX-errors: %10" PRIu64
-				   "    TX-bytes: %10" PRIu64 "\n",
-			       stats.opackets, stats.oerrors, stats.obytes);
+					   "    TX-errors: %10" PRIu64
+					   "    TX-bytes: %10" PRIu64 "\n",
+					   stats.opackets, stats.oerrors, stats.obytes);
 
 		cmdline_printf(cl, "\n");
 		for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
 			cmdline_printf(cl,
-				       "  Stats reg %2d RX-packets: %10" PRIu64
-				       "    RX-errors: %10" PRIu64
-				       "    RX-bytes: %10" PRIu64 "\n",
-				       i, stats.q_ipackets[i],
-				       stats.q_errors[i], stats.q_ibytes[i]);
+						   "  Stats reg %2d RX-packets: %10" PRIu64
+						   "    RX-errors: %10" PRIu64
+						   "    RX-bytes: %10" PRIu64 "\n",
+						   i, stats.q_ipackets[i],
+						   stats.q_errors[i], stats.q_ibytes[i]);
 		}
 		cmdline_printf(cl, "\n");
 		for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
 			cmdline_printf(
-			    cl,
-			    "  Stats reg %2d TX-packets: %10" PRIu64
-			    "                             TX-bytes: %10" PRIu64
-			    "\n",
-			    i, stats.q_opackets[i], stats.q_obytes[i]);
+				cl,
+				"  Stats reg %2d TX-packets: %10" PRIu64
+				"                             TX-bytes: %10" PRIu64
+				"\n",
+				i, stats.q_opackets[i], stats.q_obytes[i]);
 		}
 
 		cmdline_printf(cl, "  %s=======================%s\n",
-			       nic_stats_border, nic_stats_border);
+					   nic_stats_border, nic_stats_border);
 	}
 }
 
 void
-nic_stats_clear(struct cmdline* cl, portid_t port_id)
+nic_stats_clear(struct cmdline *cl, portid_t port_id)
 {
 	rte_eth_stats_reset(port_id);
 	cmdline_printf(cl, "\n  NIC statistics for port %d cleared\n", port_id);
 }
 
 void
-nic_xstats_display(struct cmdline* cl, portid_t port_id, int option)
+nic_xstats_display(struct cmdline *cl, portid_t port_id, int option)
 {
 	struct rte_eth_xstat_name *xstats_names;
-	struct rte_eth_xstat* xstats;
+	struct rte_eth_xstat *xstats;
 	int len, ret, i;
 
 	len = rte_eth_xstats_get_names(port_id, NULL, 0);
@@ -438,58 +449,60 @@ nic_xstats_display(struct cmdline* cl, portid_t port_id, int option)
 	if (option) {
 		cmdline_printf(cl, "{\"portid\": %d, ", port_id);
 
-		for (i = 0; i < len; i++)
+		for (i = 0; i < len; i++) {
 			cmdline_printf(cl, "%s\"%s\": %" PRIu64,
-				       (i != 0) ? ", " : "", xstats_names[i].name,
-				       xstats[i].value);
+						   (i != 0) ? ", " : "", xstats_names[i].name,
+						   xstats[i].value);
+		}
 
 		cmdline_printf(cl, "}\n");
-
-	} else {
+	}
+	else {
 		cmdline_printf(cl,
-			       "===== NIC extended statistics for port %-2d\n",
-			       port_id);
+					   "===== NIC extended statistics for port %-2d\n",
+					   port_id);
 
-		for (i = 0; i < len; i++)
+		for (i = 0; i < len; i++) {
 			cmdline_printf(cl, "%s: %" PRIu64 "\n", xstats_names[i].name,
-				       xstats[i].value);
+						   xstats[i].value);
+		}
 	}
 	free(xstats_names);
 	free(xstats);
 }
 
 void
-nic_xstats_clear(struct cmdline* cl, portid_t port_id)
+nic_xstats_clear(struct cmdline *cl, portid_t port_id)
 {
 	rte_eth_xstats_reset(port_id);
 	cmdline_printf(cl, "\n  NIC extra statistics for port %d cleared\n",
-		       port_id);
+				   port_id);
 }
 
 void
-port_rss_hash_conf_show(struct cmdline* cl, portid_t port_id, int show_rss_key)
+port_rss_hash_conf_show(struct cmdline *cl, portid_t port_id, int show_rss_key)
 {
 	struct rss_type_info {
-		char str[32];
-		uint64_t rss_type;
+		char		str[32];
+		uint64_t	rss_type;
 	};
 	static const struct rss_type_info rss_type_table[] = {
-	    {"ipv4", ETH_RSS_IPV4},
-	    {"ipv4-frag", ETH_RSS_FRAG_IPV4},
-	    {"ipv4-tcp", ETH_RSS_NONFRAG_IPV4_TCP},
-	    {"ipv4-udp", ETH_RSS_NONFRAG_IPV4_UDP},
-	    {"ipv4-sctp", ETH_RSS_NONFRAG_IPV4_SCTP},
-	    {"ipv4-other", ETH_RSS_NONFRAG_IPV4_OTHER},
-	    {"ipv6", ETH_RSS_IPV6},
-	    {"ipv6-frag", ETH_RSS_FRAG_IPV6},
-	    {"ipv6-tcp", ETH_RSS_NONFRAG_IPV6_TCP},
-	    {"ipv6-udp", ETH_RSS_NONFRAG_IPV6_UDP},
-	    {"ipv6-sctp", ETH_RSS_NONFRAG_IPV6_SCTP},
-	    {"ipv6-other", ETH_RSS_NONFRAG_IPV6_OTHER},
-	    {"l2-payload", ETH_RSS_L2_PAYLOAD},
-	    {"ipv6-ex", ETH_RSS_IPV6_EX},
-	    {"ipv6-tcp-ex", ETH_RSS_IPV6_TCP_EX},
-	    {"ipv6-udp-ex", ETH_RSS_IPV6_UDP_EX},
+		{ "ipv4",		 ETH_RSS_IPV4				},
+		{ "ipv4-frag",	 ETH_RSS_FRAG_IPV4			},
+		{ "ipv4-tcp",	 ETH_RSS_NONFRAG_IPV4_TCP	},
+		{ "ipv4-udp",	 ETH_RSS_NONFRAG_IPV4_UDP	},
+		{ "ipv4-sctp",	 ETH_RSS_NONFRAG_IPV4_SCTP	},
+		{ "ipv4-other",	 ETH_RSS_NONFRAG_IPV4_OTHER },
+		{ "ipv6",		 ETH_RSS_IPV6				},
+		{ "ipv6-frag",	 ETH_RSS_FRAG_IPV6			},
+		{ "ipv6-tcp",	 ETH_RSS_NONFRAG_IPV6_TCP	},
+		{ "ipv6-udp",	 ETH_RSS_NONFRAG_IPV6_UDP	},
+		{ "ipv6-sctp",	 ETH_RSS_NONFRAG_IPV6_SCTP	},
+		{ "ipv6-other",	 ETH_RSS_NONFRAG_IPV6_OTHER },
+		{ "l2-payload",	 ETH_RSS_L2_PAYLOAD			},
+		{ "ipv6-ex",	 ETH_RSS_IPV6_EX			},
+		{ "ipv6-tcp-ex", ETH_RSS_IPV6_TCP_EX		},
+		{ "ipv6-udp-ex", ETH_RSS_IPV6_UDP_EX		},
 	};
 
 	struct rte_eth_rss_conf rss_conf;
@@ -508,11 +521,11 @@ port_rss_hash_conf_show(struct cmdline* cl, portid_t port_id, int show_rss_key)
 			break;
 		case -ENOTSUP:
 			cmdline_printf(cl,
-				       "operation not supported by device\n");
+						   "operation not supported by device\n");
 			break;
 		default:
 			cmdline_printf(cl, "operation failed - diag=%d\n",
-				       diag);
+						   diag);
 			break;
 		}
 		return;
@@ -524,22 +537,25 @@ port_rss_hash_conf_show(struct cmdline* cl, portid_t port_id, int show_rss_key)
 	}
 	cmdline_printf(cl, "RSS functions:\n ");
 	for (i = 0; i < RTE_DIM(rss_type_table); i++) {
-		if (rss_hf & rss_type_table[i].rss_type)
+		if (rss_hf & rss_type_table[i].rss_type) {
 			cmdline_printf(cl, "%s ", rss_type_table[i].str);
+		}
 	}
 	cmdline_printf(cl, "\n");
-	if (!show_rss_key)
+	if (!show_rss_key) {
 		return;
+	}
 	cmdline_printf(cl, "RSS key:\n");
-	for (i = 0; i < rss_conf.rss_key_len; i++)
+	for (i = 0; i < rss_conf.rss_key_len; i++) {
 		cmdline_printf(cl, "%02X", rss_key[i]);
+	}
 	cmdline_printf(cl, "\n");
 }
 
 void
-port_rss_hash_key_update(struct cmdline* cl,
-			 portid_t port_id,
-			 uint8_t* hash_key)
+port_rss_hash_key_update(struct cmdline *cl,
+						 portid_t		port_id,
+						 uint8_t		*hash_key)
 {
 	struct rte_eth_rss_conf rss_conf;
 	int diag;
@@ -551,8 +567,9 @@ port_rss_hash_key_update(struct cmdline* cl,
 		rss_conf.rss_key_len = RSS_HASH_KEY_LENGTH;
 		diag = rte_eth_dev_rss_hash_update(port_id, &rss_conf);
 	}
-	if (diag == 0)
+	if (diag == 0) {
 		return;
+	}
 
 	switch (diag) {
 	case -ENODEV:
